@@ -1,0 +1,25 @@
+name: Calculator CI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify Python
+        run: python --version
+
+      - name: Run calculator
+        run: python src/BodmasCalc.py
