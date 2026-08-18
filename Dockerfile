@@ -4,4 +4,4 @@ WORKDIR /app
 
 COPY src/ ./src/
 
-CMD ["python", "src/BodmasCalc.py"]
+ENTRYPOINT ["python", "src/BodmasCalc.py"]
