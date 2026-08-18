@@ -26,3 +26,14 @@ jobs:
 
       - name: Run Ruff lint
         uses: astral-sh/ruff-action@v3
+
+- name: Build Docker image
+  run: docker build -t calculator:${{ github.sha }} .
+
+- name: Run Docker container
+  run: docker run --rm calculator:${{ github.sha }} "2+3*4"
+
+- name: Smoke test
+  run: |
+    output=$(docker run --rm calculator:${{ github.sha }} "2+3*4")
+    test "$output" = "result: 14"
