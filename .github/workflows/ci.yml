@@ -23,3 +23,6 @@ jobs:
 
       - name: Run calculator
         run: python -m unittest discover -s tests
+
+      - name: Run Ruff lint
+        uses: astral-sh/ruff-action@v3
