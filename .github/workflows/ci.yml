@@ -22,4 +22,4 @@ jobs:
         run: python --version
 
       - name: Run calculator
-        run: python src/BodmasCalc.py "2+3*4"
+        run: python -m unittest discover -s tests
