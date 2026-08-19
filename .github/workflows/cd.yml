@@ -1,0 +1,73 @@
+name: Calculator CD
+
+on:
+  workflow_run:
+    workflows:
+      - Calculator CI
+    types:
+      - completed
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull application image
+        run: |
+          docker pull \
+            ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
+
+      - name: Deploy application
+        run: |
+          docker run -d \
+            --name calculator-api \
+            -p 8080:8080 \
+            ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
+
+      - name: Verify deployment
+        run: |
+          for i in {1..15}; do
+            if curl --fail --silent http://localhost:8080/health; then
+              echo
+              echo "Deployment healthy"
+              exit 0
+            fi
+
+            echo "Waiting for application..."
+            sleep 2
+          done
+
+          echo "Deployment failed"
+          docker logs calculator-api
+          exit 1
+
+      - name: Smoke test deployed application
+        run: |
+          response=$(curl --fail --silent \
+            "http://localhost:8080/calculate?expression=2%2B3%2A4")
+
+          echo "Response: $response"
+
+          test "$response" = '{"result":14.0}'
+
+      - name: Deployment information
+        run: |
+          echo "Deployed image:"
+          echo "ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f calculator-api || true
