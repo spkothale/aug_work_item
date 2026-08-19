@@ -18,6 +18,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # --------------------------------------------------
+      # 1. Login to GHCR
+      # --------------------------------------------------
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -25,27 +29,34 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # --------------------------------------------------
+      # 2. Find previous successful CI version
+      # --------------------------------------------------
       - name: Find previous successful version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CURRENT_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          echo "Current version:"
+          echo "Current deployment SHA:"
           echo "$CURRENT_SHA"
 
+          echo "Searching for previous successful CI run..."
+
           PREVIOUS_SHA=$(
-            gh run list \
-              --workflow "Calculator CI" \
-              --status success \
-              --limit 10 \
-              --json headSha \
-              --jq '.[].headSha' |
-            grep -v "$CURRENT_SHA" |
+            gh api \
+              "repos/$REPOSITORY/actions/workflows/ci.yml/runs?status=success&per_page=20" \
+              --jq '.workflow_runs[]
+                | select(.head_sha != env.CURRENT_SHA)
+                | .head_sha' |
             head -n 1
           )
 
+          echo "Previous SHA:"
+          echo "$PREVIOUS_SHA"
+
           if [ -z "$PREVIOUS_SHA" ]; then
-            echo "No previous successful version found"
+            echo "ERROR: No previous successful CI version found."
             exit 1
           fi
 
@@ -54,16 +65,25 @@ jobs:
 
           echo "PREVIOUS_SHA=$PREVIOUS_SHA" >> "$GITHUB_ENV"
 
+      # --------------------------------------------------
+      # 3. Pull current image
+      # --------------------------------------------------
       - name: Pull current image
         run: |
           docker pull \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
+      # --------------------------------------------------
+      # 4. Pull previous known-good image
+      # --------------------------------------------------
       - name: Pull previous known-good image
         run: |
           docker pull \
             ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
 
+      # --------------------------------------------------
+      # 5. Deploy current version
+      # --------------------------------------------------
       - name: Deploy current version
         run: |
           docker run -d \
@@ -71,11 +91,15 @@ jobs:
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
+      # --------------------------------------------------
+      # 6. Verify current deployment
+      # --------------------------------------------------
       - name: Verify current deployment
         id: verify
         continue-on-error: true
         run: |
           for i in {1..15}; do
+
             response=$(curl --fail --silent \
               http://localhost:8080/health || true)
 
@@ -88,40 +112,63 @@ jobs:
 
             echo "Application not healthy yet..."
             sleep 2
+
           done
 
           echo "Current deployment failed health verification"
+
+          echo "===== Container logs ====="
           docker logs calculator-api
+
           exit 1
 
+      # --------------------------------------------------
+      # 7. Successful deployment
+      # --------------------------------------------------
       - name: Deployment successful
         if: steps.verify.outcome == 'success'
         run: |
+          echo "======================================"
           echo "Deployment successful"
           echo "Running version:"
           echo "${{ github.event.workflow_run.head_sha }}"
+          echo "======================================"
 
+      # --------------------------------------------------
+      # 8. Stop unhealthy deployment
+      # --------------------------------------------------
       - name: Stop failed deployment
         if: steps.verify.outcome == 'failure'
         run: |
-          echo "Stopping unhealthy version"
+          echo "Stopping unhealthy deployment..."
+
           docker rm -f calculator-api || true
 
+      # --------------------------------------------------
+      # 9. Deploy previous known-good version
+      # --------------------------------------------------
       - name: Deploy previous known-good version
         if: steps.verify.outcome == 'failure'
         run: |
+          echo "======================================"
+          echo "ROLLBACK STARTED"
           echo "Rolling back to:"
           echo "$PREVIOUS_SHA"
+          echo "======================================"
 
           docker run -d \
             --name calculator-api \
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
 
+      # --------------------------------------------------
+      # 10. Verify rollback
+      # --------------------------------------------------
       - name: Verify rollback
         if: steps.verify.outcome == 'failure'
         run: |
           for i in {1..15}; do
+
             response=$(curl --fail --silent \
               http://localhost:8080/health || true)
 
@@ -134,22 +181,35 @@ jobs:
 
             echo "Waiting for rollback..."
             sleep 2
+
           done
 
           echo "Rollback failed"
+
+          echo "===== Rollback container logs ====="
           docker logs calculator-api
+
           exit 1
 
+      # --------------------------------------------------
+      # 11. Smoke test after rollback
+      # --------------------------------------------------
       - name: Rollback smoke test
         if: steps.verify.outcome == 'failure'
         run: |
           response=$(curl --fail --silent \
             "http://localhost:8080/calculate?expression=2%2B3%2A4")
 
-          echo "Rollback response: $response"
+          echo "Rollback response:"
+          echo "$response"
 
           test "$response" = '{"result":14.0}'
 
+          echo "Rollback smoke test passed"
+
+      # --------------------------------------------------
+      # 12. Cleanup
+      # --------------------------------------------------
       - name: Cleanup
         if: always()
         run: |
