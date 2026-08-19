@@ -19,7 +19,7 @@ class CalculatorHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             self.wfile.write(
-                b'{"status":"healthy"}'
+                b'{"status":"unhealthy"}'
             )
 
         elif parsed_url.path == "/calculate":
