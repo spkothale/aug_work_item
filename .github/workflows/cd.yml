@@ -20,7 +20,7 @@ jobs:
     steps:
 
       # --------------------------------------------------
-      # 1. Login to GHCR
+      # 1. Login to GitHub Container Registry
       # --------------------------------------------------
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -100,10 +100,11 @@ jobs:
         run: |
           for i in {1..15}; do
 
-            response=$(curl --fail --silent \
+            response=$(curl --silent \
               http://localhost:8080/health || true)
 
-            echo "Health response: $response"
+            echo "Current health response:"
+            echo "[$response]"
 
             if [ "$response" = '{"status":"healthy"}' ]; then
               echo "Current deployment is healthy"
@@ -111,19 +112,20 @@ jobs:
             fi
 
             echo "Application not healthy yet..."
+            echo "Attempt $i/15"
             sleep 2
 
           done
 
           echo "Current deployment failed health verification"
 
-          echo "===== Container logs ====="
+          echo "===== Current container logs ====="
           docker logs calculator-api
 
           exit 1
 
       # --------------------------------------------------
-      # 7. Successful deployment
+      # 7. Deployment successful
       # --------------------------------------------------
       - name: Deployment successful
         if: steps.verify.outcome == 'success'
@@ -169,10 +171,11 @@ jobs:
         run: |
           for i in {1..15}; do
 
-            response=$(curl --fail --silent \
+            response=$(curl --silent \
               http://localhost:8080/health || true)
 
-            echo "Rollback health response: $response"
+            echo "Rollback health response:"
+            echo "[$response]"
 
             if [ "$response" = '{"status":"healthy"}' ]; then
               echo "Rollback successful"
@@ -180,6 +183,7 @@ jobs:
             fi
 
             echo "Waiting for rollback..."
+            echo "Attempt $i/15"
             sleep 2
 
           done
@@ -188,6 +192,13 @@ jobs:
 
           echo "===== Rollback container logs ====="
           docker logs calculator-api
+
+          echo "===== Container status ====="
+          docker ps -a
+
+          echo "===== Container inspect ====="
+          docker inspect calculator-api \
+            --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}'
 
           exit 1
 
