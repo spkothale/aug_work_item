@@ -66,7 +66,7 @@ jobs:
           echo "PREVIOUS_SHA=$PREVIOUS_SHA" >> "$GITHUB_ENV"
 
       # ==================================================
-      # 3. Pull current Docker image
+      # 3. Pull current image
       # ==================================================
       - name: Pull current image
         run: |
@@ -74,7 +74,7 @@ jobs:
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
       # ==================================================
-      # 4. Pull previous known-good Docker image
+      # 4. Pull previous known-good image
       # ==================================================
       - name: Pull previous known-good image
         run: |
@@ -104,26 +104,25 @@ jobs:
             echo "Current deployment verification attempt $i/15"
             echo "======================================"
 
-            HTTP_CODE=$(curl \
+            response=$(curl \
               --silent \
-              --output /tmp/current_health.json \
-              --write-out "%{http_code}" \
+              --show-error \
+              --write-out "|||HTTP_STATUS:%{http_code}" \
               http://localhost:8080/health || true)
 
-            echo "HTTP status: $HTTP_CODE"
+            HTTP_CODE="${response##*|||HTTP_STATUS:}"
+            BODY="${response%|||HTTP_STATUS:*}"
 
-            echo "Health response:"
-            cat /tmp/current_health.json
-            echo
+            echo "HTTP status: $HTTP_CODE"
+            echo "Health response: [$BODY]"
 
             if [ "$HTTP_CODE" = "200" ]; then
 
-              STATUS=$(python -c '
-          import json
-          with open("/tmp/current_health.json") as f:
-              data = json.load(f)
-          print(data.get("status", ""))
-          ' 2>/dev/null || true)
+              STATUS=$(python -c "
+import json
+data = json.loads('''$BODY''')
+print(data.get('status', ''))
+" 2>/dev/null || true)
 
               echo "Parsed status: [$STATUS]"
 
@@ -135,14 +134,28 @@ jobs:
             fi
 
             echo "Application not healthy yet..."
+
+            if [ "$i" = "1" ] || [ "$i" = "5" ] || [ "$i" = "10" ]; then
+              echo "===== Current container status ====="
+              docker ps -a
+
+              echo "===== Current container logs ====="
+              docker logs calculator-api || true
+            fi
+
             sleep 2
 
           done
 
-          echo "Current deployment failed health verification"
+          echo "======================================"
+          echo "CURRENT DEPLOYMENT FAILED"
+          echo "======================================"
 
-          echo "===== Current container logs ====="
-          docker logs calculator-api
+          echo "===== Container status ====="
+          docker ps -a
+
+          echo "===== Container logs ====="
+          docker logs calculator-api || true
 
           exit 1
 
@@ -186,6 +199,13 @@ jobs:
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
 
+          echo "Rollback container started"
+
+          sleep 2
+
+          echo "===== Rollback container status ====="
+          docker ps -a
+
       # ==================================================
       # 10. Verify rollback
       # ==================================================
@@ -198,26 +218,25 @@ jobs:
             echo "Rollback verification attempt $i/15"
             echo "======================================"
 
-            HTTP_CODE=$(curl \
+            response=$(curl \
               --silent \
-              --output /tmp/rollback_health.json \
-              --write-out "%{http_code}" \
+              --show-error \
+              --write-out "|||HTTP_STATUS:%{http_code}" \
               http://localhost:8080/health || true)
 
-            echo "HTTP status: $HTTP_CODE"
+            HTTP_CODE="${response##*|||HTTP_STATUS:}"
+            BODY="${response%|||HTTP_STATUS:*}"
 
-            echo "Health response:"
-            cat /tmp/rollback_health.json
-            echo
+            echo "HTTP status: $HTTP_CODE"
+            echo "Health response: [$BODY]"
 
             if [ "$HTTP_CODE" = "200" ]; then
 
-              STATUS=$(python -c '
-          import json
-          with open("/tmp/rollback_health.json") as f:
-              data = json.load(f)
-          print(data.get("status", ""))
-          ' 2>/dev/null || true)
+              STATUS=$(python -c "
+import json
+data = json.loads('''$BODY''')
+print(data.get('status', ''))
+" 2>/dev/null || true)
 
               echo "Parsed rollback status: [$STATUS]"
 
@@ -231,6 +250,15 @@ jobs:
             fi
 
             echo "Rollback not healthy yet..."
+
+            if [ "$i" = "1" ] || [ "$i" = "5" ] || [ "$i" = "10" ]; then
+              echo "===== Rollback container status ====="
+              docker ps -a
+
+              echo "===== Rollback container logs ====="
+              docker logs calculator-api || true
+            fi
+
             sleep 2
 
           done
@@ -239,15 +267,15 @@ jobs:
           echo "ROLLBACK FAILED"
           echo "======================================"
 
-          echo "===== Rollback container logs ====="
-          docker logs calculator-api
-
           echo "===== Container status ====="
           docker ps -a
 
+          echo "===== Container logs ====="
+          docker logs calculator-api || true
+
           echo "===== Container inspect ====="
           docker inspect calculator-api \
-            --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}'
+            --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}' || true
 
           exit 1
 
