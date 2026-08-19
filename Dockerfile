@@ -4,4 +4,6 @@ WORKDIR /app
 
 COPY src/ ./src/
 
-ENTRYPOINT ["python", "src/BodmasCalc.py"]
+EXPOSE 8080
+
+CMD ["python", "src/api.py"]

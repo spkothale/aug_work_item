@@ -34,14 +34,33 @@ jobs:
       - name: Build Docker image
         run: docker build -t calculator:${{ github.sha }} .
 
-      - name: Run Docker container
-        run: docker run --rm calculator:${{ github.sha }} "2+3*4"
-
-      - name: Smoke test
+      - name: Start Docker container
         run: |
-          output=$(docker run --rm calculator:${{ github.sha }} "2+3*4")
-          echo "$output"
-          test "$output" = "result: 14"
+          docker run -d \
+            --name calculator-api \
+            -p 8080:8080 \
+            calculator:${{ github.sha }}
+
+      - name: Check container is running
+        run: docker ps
+
+      - name: Health check
+        run: |
+          sleep 2
+          curl --fail http://localhost:8080/health
+
+      - name: API smoke test
+        run: |
+          response=$(curl --fail \
+            "http://localhost:8080/calculate?expression=2%2B3%2A4")
+
+          echo "Response: $response"
+
+          test "$response" = '{"result":14.0}'
+
+      - name: Stop Docker container
+        if: always()
+        run: docker rm -f calculator-api      
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
