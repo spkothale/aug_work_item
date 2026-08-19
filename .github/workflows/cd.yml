@@ -19,9 +19,9 @@ jobs:
 
     steps:
 
-      # --------------------------------------------------
+      # ==================================================
       # 1. Login to GitHub Container Registry
-      # --------------------------------------------------
+      # ==================================================
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -29,9 +29,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --------------------------------------------------
+      # ==================================================
       # 2. Find previous successful CI version
-      # --------------------------------------------------
+      # ==================================================
       - name: Find previous successful version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,25 +65,25 @@ jobs:
 
           echo "PREVIOUS_SHA=$PREVIOUS_SHA" >> "$GITHUB_ENV"
 
-      # --------------------------------------------------
-      # 3. Pull current image
-      # --------------------------------------------------
+      # ==================================================
+      # 3. Pull current Docker image
+      # ==================================================
       - name: Pull current image
         run: |
           docker pull \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
-      # --------------------------------------------------
-      # 4. Pull previous known-good image
-      # --------------------------------------------------
+      # ==================================================
+      # 4. Pull previous known-good Docker image
+      # ==================================================
       - name: Pull previous known-good image
         run: |
           docker pull \
             ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
 
-      # --------------------------------------------------
+      # ==================================================
       # 5. Deploy current version
-      # --------------------------------------------------
+      # ==================================================
       - name: Deploy current version
         run: |
           docker run -d \
@@ -91,34 +91,50 @@ jobs:
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
-      # --------------------------------------------------
+      # ==================================================
       # 6. Verify current deployment
-      # --------------------------------------------------
+      # ==================================================
       - name: Verify current deployment
         id: verify
         continue-on-error: true
         run: |
           for i in {1..15}; do
 
-            response=$(curl --silent \
+            echo "======================================"
+            echo "Current deployment verification attempt $i/15"
+            echo "======================================"
+
+            HTTP_CODE=$(curl \
+              --silent \
+              --output /tmp/current_health.json \
+              --write-out "%{http_code}" \
               http://localhost:8080/health || true)
 
-            echo "Current health response:"
-            echo "[$response]"
+            echo "HTTP status: $HTTP_CODE"
 
-            status=$(echo "$response" | jq -r '.status' 2>/dev/null || true)
+            echo "Health response:"
+            cat /tmp/current_health.json
+            echo
 
-            echo "Parsed health status:"
-            echo "[$status]"
+            if [ "$HTTP_CODE" = "200" ]; then
 
-            if [ "$status" = "healthy" ]; then
-              echo "Current deployment is healthy"
-              exit 0
+              STATUS=$(python -c '
+          import json
+          with open("/tmp/current_health.json") as f:
+              data = json.load(f)
+          print(data.get("status", ""))
+          ' 2>/dev/null || true)
+
+              echo "Parsed status: [$STATUS]"
+
+              if [ "$STATUS" = "healthy" ]; then
+                echo "Current deployment is healthy"
+                exit 0
+              fi
+
             fi
 
             echo "Application not healthy yet..."
-            echo "Attempt $i/15"
-
             sleep 2
 
           done
@@ -130,21 +146,21 @@ jobs:
 
           exit 1
 
-      # --------------------------------------------------
+      # ==================================================
       # 7. Deployment successful
-      # --------------------------------------------------
+      # ==================================================
       - name: Deployment successful
         if: steps.verify.outcome == 'success'
         run: |
           echo "======================================"
-          echo "Deployment successful"
+          echo "DEPLOYMENT SUCCESSFUL"
+          echo "======================================"
           echo "Running version:"
           echo "${{ github.event.workflow_run.head_sha }}"
-          echo "======================================"
 
-      # --------------------------------------------------
+      # ==================================================
       # 8. Stop failed deployment
-      # --------------------------------------------------
+      # ==================================================
       - name: Stop failed deployment
         if: steps.verify.outcome == 'failure'
         run: |
@@ -152,55 +168,76 @@ jobs:
 
           docker rm -f calculator-api || true
 
-      # --------------------------------------------------
+      # ==================================================
       # 9. Deploy previous known-good version
-      # --------------------------------------------------
+      # ==================================================
       - name: Deploy previous known-good version
         if: steps.verify.outcome == 'failure'
         run: |
           echo "======================================"
           echo "ROLLBACK STARTED"
+          echo "======================================"
+
           echo "Rolling back to:"
           echo "$PREVIOUS_SHA"
-          echo "======================================"
 
           docker run -d \
             --name calculator-api \
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
 
-      # --------------------------------------------------
+      # ==================================================
       # 10. Verify rollback
-      # --------------------------------------------------
+      # ==================================================
       - name: Verify rollback
         if: steps.verify.outcome == 'failure'
         run: |
           for i in {1..15}; do
 
-            response=$(curl --silent \
+            echo "======================================"
+            echo "Rollback verification attempt $i/15"
+            echo "======================================"
+
+            HTTP_CODE=$(curl \
+              --silent \
+              --output /tmp/rollback_health.json \
+              --write-out "%{http_code}" \
               http://localhost:8080/health || true)
 
-            echo "Rollback health response:"
-            echo "[$response]"
+            echo "HTTP status: $HTTP_CODE"
 
-            status=$(echo "$response" | jq -r '.status' 2>/dev/null || true)
+            echo "Health response:"
+            cat /tmp/rollback_health.json
+            echo
 
-            echo "Parsed rollback health status:"
-            echo "[$status]"
+            if [ "$HTTP_CODE" = "200" ]; then
 
-            if [ "$status" = "healthy" ]; then
-              echo "Rollback successful"
-              exit 0
+              STATUS=$(python -c '
+          import json
+          with open("/tmp/rollback_health.json") as f:
+              data = json.load(f)
+          print(data.get("status", ""))
+          ' 2>/dev/null || true)
+
+              echo "Parsed rollback status: [$STATUS]"
+
+              if [ "$STATUS" = "healthy" ]; then
+                echo "======================================"
+                echo "ROLLBACK SUCCESSFUL"
+                echo "======================================"
+                exit 0
+              fi
+
             fi
 
-            echo "Waiting for rollback..."
-            echo "Attempt $i/15"
-
+            echo "Rollback not healthy yet..."
             sleep 2
 
           done
 
-          echo "Rollback failed"
+          echo "======================================"
+          echo "ROLLBACK FAILED"
+          echo "======================================"
 
           echo "===== Rollback container logs ====="
           docker logs calculator-api
@@ -214,26 +251,34 @@ jobs:
 
           exit 1
 
-      # --------------------------------------------------
-      # 11. Smoke test after rollback
-      # --------------------------------------------------
+      # ==================================================
+      # 11. Rollback smoke test
+      # ==================================================
       - name: Rollback smoke test
         if: steps.verify.outcome == 'failure'
         run: |
-          response=$(curl --fail --silent \
+          echo "======================================"
+          echo "ROLLBACK SMOKE TEST"
+          echo "======================================"
+
+          response=$(curl \
+            --silent \
+            --show-error \
             "http://localhost:8080/calculate?expression=2%2B3%2A4")
 
-          echo "Rollback response:"
+          echo "Calculator response:"
           echo "$response"
 
           test "$response" = '{"result":14.0}'
 
           echo "Rollback smoke test passed"
 
-      # --------------------------------------------------
+      # ==================================================
       # 12. Cleanup
-      # --------------------------------------------------
+      # ==================================================
       - name: Cleanup
         if: always()
         run: |
+          echo "Cleaning up container..."
+
           docker rm -f calculator-api || true
