@@ -6,4 +6,4 @@ COPY src/ ./src/
 
 EXPOSE 8080
 
-CMD ["python", "-m", "src/api.py"]
+CMD ["python", "-m", "src.api"]
