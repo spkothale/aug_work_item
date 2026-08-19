@@ -1,8 +1,7 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from BodmasCalc import Bodmas
-
+from src.bodmas_calc import Bodmas
 
 calculator = Bodmas()
 
@@ -54,7 +53,7 @@ class CalculatorHandler(BaseHTTPRequestHandler):
 
                 self.wfile.write(response)
 
-            except Exception:
+            except (ValueError, ZeroDivisionError, IndexError):
 
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
@@ -78,10 +77,10 @@ class CalculatorHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
 
     server = HTTPServer(
-        ("0.0.0.0", 8081),
+        ("0.0.0.0", 8080),
         CalculatorHandler
     )
 
-    print("Calculator API running on port 8081")
+    print("Calculator API running on port 8080")
 
     server.serve_forever()

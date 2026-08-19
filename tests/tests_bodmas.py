@@ -1,6 +1,6 @@
 import unittest
 
-from src.BodmasCalc import Bodmas
+from src.bodmas_calc import Bodmas
 
 
 class TestBodmas(unittest.TestCase):
@@ -20,7 +20,7 @@ class TestBodmas(unittest.TestCase):
         result = calculator.calculate("2+8/4")
         self.assertEqual(result, 4)
 
-    def test_bodmas_precedence(self):
+    def test_multiplication_and_addition(self):
         calculator = Bodmas()
         result = calculator.calculate("3*4+2*2")
         self.assertEqual(result, 16)
