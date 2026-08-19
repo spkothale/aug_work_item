@@ -77,10 +77,10 @@ class CalculatorHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
 
     server = HTTPServer(
-        ("0.0.0.0", 8080),
+        ("0.0.0.0", 8081),
         CalculatorHandler
     )
 
-    print("Calculator API running on port 8080")
+    print("Calculator API running on port 8081")
 
     server.serve_forever()
