@@ -32,7 +32,9 @@ jobs:
         uses: astral-sh/ruff-action@v3
 
       - name: Build Docker image
-        run: docker build -t calculator:${{ github.sha }} .
+        run: |
+          docker build \
+            -t calculator:${{ github.sha }} .
 
       - name: Start Docker container
         run: |
@@ -43,7 +45,17 @@ jobs:
 
       - name: Check container status
         run: |
+          echo "===== Docker containers ====="
           docker ps -a
+
+          echo "===== Container inspect ====="
+          docker inspect calculator-api \
+            --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}'
+
+          echo "===== Container command ====="
+          docker inspect calculator-api \
+            --format='Entrypoint={{.Config.Entrypoint}} Cmd={{.Config.Cmd}}'
+
           echo "===== Container logs ====="
           docker logs calculator-api
 
@@ -76,7 +88,8 @@ jobs:
 
       - name: Stop Docker container
         if: always()
-        run: docker rm -f calculator-api
+        run: |
+          docker rm -f calculator-api || true
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -85,10 +98,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push Docker image
+      - name: Tag Docker image
         run: |
           docker tag calculator:${{ github.sha }} \
             ghcr.io/${{ github.repository }}:${{ github.sha }}
 
-          docker push \
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+      - name: Push Docker image
+        run: |
+          for i in {1..3}; do
+            echo "Docker push attempt $i/3"
+
+            if docker push \
+              ghcr.io/${{ github.repository }}:${{ github.sha }}; then
+              echo "Docker image pushed successfully"
+              exit 0
+            fi
+
+            echo "Docker push failed. Retrying in 5 seconds..."
+            sleep 5
+          done
+
+          echo "Docker image push failed after 3 attempts"
+          exit 1
