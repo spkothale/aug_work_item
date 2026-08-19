@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
   packages: read
+  actions: read
 
 jobs:
   deploy:
@@ -24,27 +25,64 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull application image
+      - name: Find previous successful version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          echo "Current version:"
+          echo "$CURRENT_SHA"
+
+          PREVIOUS_SHA=$(
+            gh run list \
+              --workflow "Calculator CI" \
+              --status success \
+              --limit 10 \
+              --json headSha \
+              --jq '.[].headSha' |
+            grep -v "$CURRENT_SHA" |
+            head -n 1
+          )
+
+          if [ -z "$PREVIOUS_SHA" ]; then
+            echo "No previous successful version found"
+            exit 1
+          fi
+
+          echo "Previous known-good version:"
+          echo "$PREVIOUS_SHA"
+
+          echo "PREVIOUS_SHA=$PREVIOUS_SHA" >> "$GITHUB_ENV"
+
+      - name: Pull current image
         run: |
           docker pull \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
-      - name: Deploy application
+      - name: Pull previous known-good image
+        run: |
+          docker pull \
+            ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
+
+      - name: Deploy current version
         run: |
           docker run -d \
             --name calculator-api \
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
-      - name: Verify deployment
+      - name: Verify current deployment
+        id: verify
+        continue-on-error: true
         run: |
           for i in {1..15}; do
-            response=$(curl --fail --silent http://localhost:8080/health || true)
+            response=$(curl --fail --silent \
+              http://localhost:8080/health || true)
 
             echo "Health response: $response"
 
             if [ "$response" = '{"status":"healthy"}' ]; then
-              echo "Deployment healthy"
+              echo "Current deployment is healthy"
               exit 0
             fi
 
@@ -52,23 +90,65 @@ jobs:
             sleep 2
           done
 
-          echo "Deployment failed health verification"
+          echo "Current deployment failed health verification"
           docker logs calculator-api
           exit 1
 
-      - name: Smoke test deployed application
+      - name: Deployment successful
+        if: steps.verify.outcome == 'success'
+        run: |
+          echo "Deployment successful"
+          echo "Running version:"
+          echo "${{ github.event.workflow_run.head_sha }}"
+
+      - name: Stop failed deployment
+        if: steps.verify.outcome == 'failure'
+        run: |
+          echo "Stopping unhealthy version"
+          docker rm -f calculator-api || true
+
+      - name: Deploy previous known-good version
+        if: steps.verify.outcome == 'failure'
+        run: |
+          echo "Rolling back to:"
+          echo "$PREVIOUS_SHA"
+
+          docker run -d \
+            --name calculator-api \
+            -p 8080:8080 \
+            ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
+
+      - name: Verify rollback
+        if: steps.verify.outcome == 'failure'
+        run: |
+          for i in {1..15}; do
+            response=$(curl --fail --silent \
+              http://localhost:8080/health || true)
+
+            echo "Rollback health response: $response"
+
+            if [ "$response" = '{"status":"healthy"}' ]; then
+              echo "Rollback successful"
+              exit 0
+            fi
+
+            echo "Waiting for rollback..."
+            sleep 2
+          done
+
+          echo "Rollback failed"
+          docker logs calculator-api
+          exit 1
+
+      - name: Rollback smoke test
+        if: steps.verify.outcome == 'failure'
         run: |
           response=$(curl --fail --silent \
             "http://localhost:8080/calculate?expression=2%2B3%2A4")
 
-          echo "Response: $response"
+          echo "Rollback response: $response"
 
           test "$response" = '{"result":14.0}'
-
-      - name: Deployment information
-        run: |
-          echo "Deployed image:"
-          echo "ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}"
 
       - name: Cleanup
         if: always()
