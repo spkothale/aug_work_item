@@ -2,8 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+ARG APP_VERSION=unknown
+ENV APP_VERSION=$APP_VERSION
+
 COPY src/ ./src/
 
-EXPOSE 8080
-
-CMD ["python", "-m", "src.api"]
+ENTRYPOINT ["python", "-m", "src.api"]

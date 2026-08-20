@@ -1,3 +1,4 @@
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -19,8 +20,22 @@ class CalculatorHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             self.wfile.write(
-                b'{"status":"unhealthy"}'
+                b'{"status":"healthy"}'
             )
+
+        elif parsed_url.path == "/version":
+
+            version = os.getenv("APP_VERSION", "unknown")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+
+            response = (
+                f'{{"version":"{version}"}}'
+            ).encode()
+
+            self.wfile.write(response)
 
         elif parsed_url.path == "/calculate":
 
