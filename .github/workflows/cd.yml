@@ -19,9 +19,9 @@ jobs:
 
     steps:
 
-      # ==================================================
+      # ============================================================
       # 1. Login to GHCR
-      # ==================================================
+      # ============================================================
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -29,283 +29,350 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ==================================================
-      # 2. Find previous successful CI version
-      # ==================================================
-      - name: Find previous successful version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT_SHA: ${{ github.event.workflow_run.head_sha }}
-          REPOSITORY: ${{ github.repository }}
+      # ============================================================
+      # 2. Identify current version
+      # ============================================================
+      - name: Show deployment version
         run: |
-          echo "Current deployment SHA:"
-          echo "$CURRENT_SHA"
+          echo "======================================"
+          echo "Current deployment version"
+          echo "======================================"
+          echo "${{ github.event.workflow_run.head_sha }}"
+          echo "======================================"
 
-          echo "Searching for previous successful CI run..."
+      # ============================================================
+      # 3. Pull last known-good image
+      # ============================================================
+      - name: Pull known-good image
+        run: |
+          echo "======================================"
+          echo "Checking for known-good image"
+          echo "======================================"
 
-          PREVIOUS_SHA=$(
-            gh api \
-              "repos/$REPOSITORY/actions/workflows/ci.yml/runs?status=success&per_page=20" \
-              --jq '.workflow_runs[]
-                | select(.head_sha != env.CURRENT_SHA)
-                | .head_sha' |
-            head -n 1
-          )
+          if docker pull \
+            ghcr.io/${{ github.repository }}:known-good; then
 
-          echo "Previous SHA:"
-          echo "$PREVIOUS_SHA"
+            echo "Known-good image found"
+            echo "KNOWN_GOOD_EXISTS=true" >> "$GITHUB_ENV"
 
-          if [ -z "$PREVIOUS_SHA" ]; then
-            echo "ERROR: No previous successful CI version found."
-            exit 1
+          else
+
+            echo "No known-good image exists yet"
+            echo "This may be the first deployment"
+            echo "KNOWN_GOOD_EXISTS=false" >> "$GITHUB_ENV"
+
           fi
 
-          echo "Previous known-good version:"
-          echo "$PREVIOUS_SHA"
-
-          echo "PREVIOUS_SHA=$PREVIOUS_SHA" >> "$GITHUB_ENV"
-
-      # ==================================================
-      # 3. Pull current image
-      # ==================================================
+      # ============================================================
+      # 4. Pull current image
+      # ============================================================
       - name: Pull current image
         run: |
+          echo "======================================"
+          echo "Pulling current image"
+          echo "======================================"
+
           docker pull \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
-      # ==================================================
-      # 4. Pull previous known-good image
-      # ==================================================
-      - name: Pull previous known-good image
-        run: |
-          docker pull \
-            ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
-
-      # ==================================================
+      # ============================================================
       # 5. Deploy current version
-      # ==================================================
+      # ============================================================
       - name: Deploy current version
         run: |
+          echo "======================================"
+          echo "Deploying current version"
+          echo "======================================"
+
+          docker rm -f calculator-api 2>/dev/null || true
+
           docker run -d \
             --name calculator-api \
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
-          sleep 2
-
-          echo "===== Current container status ====="
-          docker ps -a
-
-      # ==================================================
+      # ============================================================
       # 6. Verify current deployment
-      # ==================================================
+      # ============================================================
       - name: Verify current deployment
         id: verify
         continue-on-error: true
         run: |
+
+          echo "======================================"
+          echo "Waiting for API"
+          echo "======================================"
+
+          healthy=false
+
           for i in {1..15}; do
 
-            echo "======================================"
-            echo "Current deployment verification attempt $i/15"
+            echo "Deployment verification attempt $i/15"
             echo "======================================"
 
             response=$(curl \
+              --fail \
               --silent \
-              --show-error \
-              --write-out "|||HTTP_STATUS:%{http_code}" \
               http://localhost:8080/health || true)
 
-            HTTP_CODE="${response##*|||HTTP_STATUS:}"
-            BODY="${response%|||HTTP_STATUS:*}"
+            echo "Health response:"
+            echo "$response"
 
-            echo "HTTP status: $HTTP_CODE"
-            echo "Health response: [$BODY]"
-
-            if [ "$HTTP_CODE" = "200" ]; then
-
-              STATUS=$(echo "$BODY" | jq -r '.status' 2>/dev/null || true)
-
-              echo "Parsed status: [$STATUS]"
-
-              if [ "$STATUS" = "healthy" ]; then
-                echo "Current deployment is healthy"
-                exit 0
-              fi
-
+            if [ "$response" = '{"status":"healthy"}' ]; then
+              echo "Application is healthy"
+              healthy=true
+              break
             fi
 
             echo "Application not healthy yet..."
-
-            if [ "$i" = "1" ] || [ "$i" = "5" ] || [ "$i" = "10" ]; then
-              echo "===== Current container status ====="
-              docker ps -a
-
-              echo "===== Current container logs ====="
-              docker logs calculator-api || true
-            fi
-
             sleep 2
 
           done
 
+          if [ "$healthy" != "true" ]; then
+
+            echo "======================================"
+            echo "CURRENT DEPLOYMENT FAILED"
+            echo "======================================"
+
+            echo "===== Container status ====="
+            docker ps -a
+
+            echo "===== Container logs ====="
+            docker logs calculator-api || true
+
+            echo "===== Container inspect ====="
+            docker inspect calculator-api \
+              --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}' \
+              || true
+
+            exit 1
+          fi
+
+          # --------------------------------------------------------
+          # Smoke test
+          # --------------------------------------------------------
+
           echo "======================================"
-          echo "CURRENT DEPLOYMENT FAILED"
+          echo "Running deployment smoke test"
           echo "======================================"
 
-          echo "===== Container status ====="
-          docker ps -a
+          smoke_response=$(curl \
+            --fail \
+            --silent \
+            "http://localhost:8080/calculate?expression=2%2B3%2A4" \
+            || true)
 
-          echo "===== Container logs ====="
-          docker logs calculator-api || true
+          echo "Smoke test response:"
+          echo "$smoke_response"
 
-          exit 1
+          if [ "$smoke_response" != '{"result":14.0}' ]; then
 
-      # ==================================================
+            echo "======================================"
+            echo "SMOKE TEST FAILED"
+            echo "======================================"
+
+            docker logs calculator-api || true
+
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "CURRENT DEPLOYMENT VERIFIED"
+          echo "======================================"
+
+      # ============================================================
       # 7. Deployment successful
-      # ==================================================
+      # ============================================================
       - name: Deployment successful
         if: steps.verify.outcome == 'success'
         run: |
           echo "======================================"
           echo "DEPLOYMENT SUCCESSFUL"
           echo "======================================"
-
           echo "Running version:"
           echo "${{ github.event.workflow_run.head_sha }}"
+          echo "======================================"
 
-      # ==================================================
-      # 8. Stop failed deployment
-      # ==================================================
+      # ============================================================
+      # 8. Update known-good
+      #
+      # IMPORTANT:
+      # This happens ONLY after deployment verification succeeds.
+      # ============================================================
+      - name: Update known-good image
+        if: steps.verify.outcome == 'success'
+        run: |
+
+          echo "======================================"
+          echo "Updating known-good image"
+          echo "======================================"
+
+          docker pull \
+            ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
+
+          docker tag \
+            ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }} \
+            ghcr.io/${{ github.repository }}:known-good
+
+          docker push \
+            ghcr.io/${{ github.repository }}:known-good
+
+          echo "======================================"
+          echo "known-good UPDATED"
+          echo "======================================"
+          echo "known-good now points to:"
+          echo "${{ github.event.workflow_run.head_sha }}"
+          echo "======================================"
+
+      # ============================================================
+      # 9. Stop failed deployment
+      # ============================================================
       - name: Stop failed deployment
         if: steps.verify.outcome == 'failure'
         run: |
-          echo "Stopping unhealthy deployment..."
+
+          echo "======================================"
+          echo "Stopping unhealthy deployment"
+          echo "======================================"
 
           docker rm -f calculator-api || true
 
-      # ==================================================
-      # 9. Deploy previous known-good version
-      # ==================================================
-      - name: Deploy previous known-good version
-        if: steps.verify.outcome == 'failure'
+      # ============================================================
+      # 10. Rollback to known-good
+      #
+      # Only possible if known-good already exists.
+      # ============================================================
+      - name: Deploy known-good version
+        if: steps.verify.outcome == 'failure' && env.KNOWN_GOOD_EXISTS == 'true'
         run: |
+
           echo "======================================"
           echo "ROLLBACK STARTED"
           echo "======================================"
-
-          echo "Rolling back to:"
-          echo "$PREVIOUS_SHA"
+          echo "Deploying last known-good version"
+          echo "======================================"
 
           docker run -d \
             --name calculator-api \
             -p 8080:8080 \
-            ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
+            ghcr.io/${{ github.repository }}:known-good
 
-          sleep 2
-
-          echo "===== Rollback container status ====="
-          docker ps -a
-
-      # ==================================================
-      # 10. Verify rollback
-      # ==================================================
+      # ============================================================
+      # 11. Rollback verification
+      # ============================================================
       - name: Verify rollback
-        if: steps.verify.outcome == 'failure'
+        if: steps.verify.outcome == 'failure' && env.KNOWN_GOOD_EXISTS == 'true'
         run: |
+
+          rollback_healthy=false
+
           for i in {1..15}; do
 
-            echo "======================================"
             echo "Rollback verification attempt $i/15"
             echo "======================================"
 
             response=$(curl \
+              --fail \
               --silent \
-              --show-error \
-              --write-out "|||HTTP_STATUS:%{http_code}" \
               http://localhost:8080/health || true)
 
-            HTTP_CODE="${response##*|||HTTP_STATUS:}"
-            BODY="${response%|||HTTP_STATUS:*}"
+            echo "Health response:"
+            echo "$response"
 
-            echo "HTTP status: $HTTP_CODE"
-            echo "Health response: [$BODY]"
+            if [ "$response" = '{"status":"healthy"}' ]; then
 
-            if [ "$HTTP_CODE" = "200" ]; then
-
-              STATUS=$(echo "$BODY" | jq -r '.status' 2>/dev/null || true)
-
-              echo "Parsed rollback status: [$STATUS]"
-
-              if [ "$STATUS" = "healthy" ]; then
-                echo "======================================"
-                echo "ROLLBACK SUCCESSFUL"
-                echo "======================================"
-
-                exit 0
-              fi
+              echo "Rollback health check passed"
+              rollback_healthy=true
+              break
 
             fi
 
             echo "Rollback not healthy yet..."
-
-            if [ "$i" = "1" ] || [ "$i" = "5" ] || [ "$i" = "10" ]; then
-
-              echo "===== Rollback container status ====="
-              docker ps -a
-
-              echo "===== Rollback container logs ====="
-              docker logs calculator-api || true
-
-            fi
-
             sleep 2
 
           done
 
-          echo "======================================"
-          echo "ROLLBACK FAILED"
-          echo "======================================"
+          if [ "$rollback_healthy" != "true" ]; then
 
-          echo "===== Container status ====="
-          docker ps -a
+            echo "======================================"
+            echo "ROLLBACK FAILED"
+            echo "======================================"
 
-          echo "===== Container logs ====="
-          docker logs calculator-api || true
+            echo "===== Container status ====="
+            docker ps -a
 
-          echo "===== Container inspect ====="
-          docker inspect calculator-api \
-            --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}' || true
+            echo "===== Container logs ====="
+            docker logs calculator-api || true
 
-          exit 1
+            echo "===== Container inspect ====="
+            docker inspect calculator-api \
+              --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}' \
+              || true
 
-      # ==================================================
-      # 11. Rollback smoke test
-      # ==================================================
+            exit 1
+          fi
+
+      # ============================================================
+      # 12. Rollback smoke test
+      # ============================================================
       - name: Rollback smoke test
-        if: steps.verify.outcome == 'failure'
+        if: steps.verify.outcome == 'failure' && env.KNOWN_GOOD_EXISTS == 'true'
         run: |
+
           echo "======================================"
-          echo "ROLLBACK SMOKE TEST"
+          echo "Running rollback smoke test"
           echo "======================================"
 
           response=$(curl \
+            --fail \
             --silent \
-            --show-error \
-            "http://localhost:8080/calculate?expression=2%2B3%2A4")
+            "http://localhost:8080/calculate?expression=2%2B3%2A4" \
+            || true)
 
-          echo "Calculator response:"
+          echo "Rollback response:"
           echo "$response"
 
-          test "$response" = '{"result":14.0}'
+          if [ "$response" != '{"result":14.0}' ]; then
 
-          echo "Rollback smoke test passed"
+            echo "======================================"
+            echo "ROLLBACK SMOKE TEST FAILED"
+            echo "======================================"
 
-      # ==================================================
-      # 12. Cleanup
-      # ==================================================
+            docker logs calculator-api || true
+
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "ROLLBACK SUCCESSFUL"
+          echo "======================================"
+
+      # ============================================================
+      # 13. No rollback target available
+      #
+      # This happens only if the first deployment fails.
+      # ============================================================
+      - name: No rollback target
+        if: steps.verify.outcome == 'failure' && env.KNOWN_GOOD_EXISTS != 'true'
+        run: |
+
+          echo "======================================"
+          echo "DEPLOYMENT FAILED"
+          echo "======================================"
+
+          echo "No known-good image exists."
+          echo "Rollback is not possible because this is"
+          echo "the first deployment or no healthy deployment"
+          echo "has been recorded yet."
+
+          exit 1
+
+      # ============================================================
+      # 14. Cleanup
+      # ============================================================
       - name: Cleanup
         if: always()
         run: |
           echo "Cleaning up container..."
-
-          docker rm -f calculator-api || true
+          docker rm -f calculator-api 2>/dev/null || true
