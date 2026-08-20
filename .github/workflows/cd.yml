@@ -20,7 +20,7 @@ jobs:
     steps:
 
       # ==================================================
-      # 1. Login to GitHub Container Registry
+      # 1. Login to GHCR
       # ==================================================
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -91,6 +91,11 @@ jobs:
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
 
+          sleep 2
+
+          echo "===== Current container status ====="
+          docker ps -a
+
       # ==================================================
       # 6. Verify current deployment
       # ==================================================
@@ -118,11 +123,7 @@ jobs:
 
             if [ "$HTTP_CODE" = "200" ]; then
 
-              STATUS=$(python -c "
-import json
-data = json.loads('''$BODY''')
-print(data.get('status', ''))
-" 2>/dev/null || true)
+              STATUS=$(echo "$BODY" | jq -r '.status' 2>/dev/null || true)
 
               echo "Parsed status: [$STATUS]"
 
@@ -168,6 +169,7 @@ print(data.get('status', ''))
           echo "======================================"
           echo "DEPLOYMENT SUCCESSFUL"
           echo "======================================"
+
           echo "Running version:"
           echo "${{ github.event.workflow_run.head_sha }}"
 
@@ -198,8 +200,6 @@ print(data.get('status', ''))
             --name calculator-api \
             -p 8080:8080 \
             ghcr.io/${{ github.repository }}:${PREVIOUS_SHA}
-
-          echo "Rollback container started"
 
           sleep 2
 
@@ -232,11 +232,7 @@ print(data.get('status', ''))
 
             if [ "$HTTP_CODE" = "200" ]; then
 
-              STATUS=$(python -c "
-import json
-data = json.loads('''$BODY''')
-print(data.get('status', ''))
-" 2>/dev/null || true)
+              STATUS=$(echo "$BODY" | jq -r '.status' 2>/dev/null || true)
 
               echo "Parsed rollback status: [$STATUS]"
 
@@ -244,6 +240,7 @@ print(data.get('status', ''))
                 echo "======================================"
                 echo "ROLLBACK SUCCESSFUL"
                 echo "======================================"
+
                 exit 0
               fi
 
@@ -252,11 +249,13 @@ print(data.get('status', ''))
             echo "Rollback not healthy yet..."
 
             if [ "$i" = "1" ] || [ "$i" = "5" ] || [ "$i" = "10" ]; then
+
               echo "===== Rollback container status ====="
               docker ps -a
 
               echo "===== Rollback container logs ====="
               docker logs calculator-api || true
+
             fi
 
             sleep 2
