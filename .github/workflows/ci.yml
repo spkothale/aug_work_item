@@ -34,62 +34,21 @@ jobs:
       - name: Build Docker image
         run: |
           docker build \
+            --build-arg APP_VERSION=${{ github.sha }} \
             -t calculator:${{ github.sha }} .
 
-      - name: Start Docker container
+      - name: Run Docker container
         run: |
-          docker run -d \
-            --name calculator-api \
-            -p 8080:8080 \
-            calculator:${{ github.sha }}
+          docker run \
+            --rm \
+            calculator:${{ github.sha }} \
+            "2+3*4"
 
-      - name: Check container status
+      - name: Smoke test
         run: |
-          echo "===== Docker containers ====="
-          docker ps -a
-
-          echo "===== Container inspect ====="
-          docker inspect calculator-api \
-            --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}'
-
-          echo "===== Container command ====="
-          docker inspect calculator-api \
-            --format='Entrypoint={{.Config.Entrypoint}} Cmd={{.Config.Cmd}}'
-
-          echo "===== Container logs ====="
-          docker logs calculator-api
-
-      - name: Wait for API
-        run: |
-          for i in {1..15}; do
-            if curl --fail --silent http://localhost:8080/health; then
-              echo
-              echo "API is ready"
-              exit 0
-            fi
-
-            echo "Waiting for API... attempt $i/15"
-            sleep 2
-          done
-
-          echo "API failed to become ready"
-          echo "===== Container logs ====="
-          docker logs calculator-api
-          exit 1
-
-      - name: API smoke test
-        run: |
-          output=$(curl --fail --silent \
-            "http://localhost:8080/calculate?expression=2%2B3%2A4")
-
-          echo "Response: $output"
-
-          test "$output" = '{"result":14.0}'
-
-      - name: Stop Docker container
-        if: always()
-        run: |
-          docker rm -f calculator-api || true
+          output=$(docker run --rm calculator:${{ github.sha }} "2+3*4")
+          echo "$output"
+          test "$output" = "result: 14"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -98,25 +57,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag Docker image
-        run: |
-          docker tag calculator:${{ github.sha }} \
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-
       - name: Push Docker image
         run: |
-          for i in {1..3}; do
-            echo "Docker push attempt $i/3"
+          docker tag \
+            calculator:${{ github.sha }} \
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
 
-            if docker push \
-              ghcr.io/${{ github.repository }}:${{ github.sha }}; then
-              echo "Docker image pushed successfully"
-              exit 0
-            fi
-
-            echo "Docker push failed. Retrying in 5 seconds..."
-            sleep 5
-          done
-
-          echo "Docker image push failed after 3 attempts"
-          exit 1
+          docker push \
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
